@@ -1,0 +1,19 @@
+# Snippet would be at end of def get_daily_flows(conn, stn):
+# Can be used when data is ready for hydat but not in current hydat release
+
+# TODO: REMOVE TEMP CHANGE AFTER NEXT HYDAT RELEASE
+    # TEMPORARY CHANGE ###########################################################################
+    if stn == '07BE001':
+        df_test = pd.read_csv('07BE001_Daily_Flow_ts.csv')
+        df_test['DATE'] = pd.to_datetime(df_test[['YEAR', 'MONTH', 'DAY']], errors='coerce')
+        df_test['FLAG'][df_test['FLAG'].isna()] = 'None'
+
+        df_test.YEAR = df_test.YEAR.astype(int)
+        df_test.MONTH = df_test.MONTH.astype(int)
+        df_test.DAY = df_test.DAY.astype(int)
+
+        df_test = df_test[df_test.YEAR <= current_yr]
+        return df_test
+    else:
+        # TEMPORARY CHANGE ###########################################################################
+        
