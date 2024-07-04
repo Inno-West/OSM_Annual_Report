@@ -13,9 +13,7 @@ Required local files:
                     year to year)
     RAMP_H.csv - RAMP daily level data to add to HYDAT daily record (for all applicable stations, will not change from
                     year to year)
-    DailyPrecipYYYY.csv - daily precip record (e.g. YYYY=2018) for ACIS, RAMP and WBEA climate stations (will need to
-                            create each year, at least until there is a suitable ECCC climate station nearby each
-                            hydrometric station with data available)
+    RDPAPrecipYYYY.csv - daily precip record (e.g. YYYY=2018) for RDPA data (will need to create each year)
 
 @author: Regan Willenborg, regan.willenborg@ec.gc.ca, RW
          James Leach, james.leach@ec.gc.ca, JL
@@ -27,29 +25,20 @@ Required local files:
 import datetime as dt
 import os
 import sqlite3
-from io import StringIO
 from timeit import default_timer as timer
+import warnings
 
 import matplotlib.dates as mdate
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
-import geopandas as gpd
-import requests
 from sigfig import round
 
-try:
-    from osgeo import gdal
-except ModuleNotFoundError:
-    import gdal
-
-
+warnings.filterwarnings('ignore')
 
 ###################################################################
 ###         OSM Stations, File Locations, & other setup         ###
 ###################################################################
-# Use RDPA?
-use_RDPA = True
 ignore_current_year_for_stats = False
 
 # Key Stations for Main Body Report
@@ -74,11 +63,12 @@ conn = sqlite3.connect(database)
 
 # Station Meta Data (record, RAMP record, associated climate stations)
 df_meta = pd.read_csv(os.path.join(files_dir, 'Station_Meta.csv'), low_memory=False)
-dfCSL = pd.read_csv('Climate_station_locations.csv')
+# dfCSL = pd.read_csv('Climate_station_locations.csv')
 
 # RAMP data
 df_RAMP_Q = pd.read_csv(os.path.join(files_dir, 'RAMP_Q.csv'), low_memory=False)
 df_RAMP_H = pd.read_csv(os.path.join(files_dir, 'RAMP_H.csv'), low_memory=False)
+
 
 ###################################################################
 ###                 Data Collection and Analysis                ###
@@ -425,124 +415,10 @@ def get_ice_affected_period(df_cy):
 
 
 # Precipitation Data
-def get_climate_data(stationID, year, timeframe):
-    """Function to download precip data from Environment Canada climate stations for current reporting year"""
-    url = f"https://climate.weather.gc.ca/climate_data/bulk_data_e.html?format=csv&stationID={stationID}&Year={year}&Month=1&Day=14&timeframe={timeframe}&submit= Download+Data"
-    response_csv = requests.get(url).text
-    df = pd.read_csv(StringIO(response_csv), encoding='unicode_escape')
-    return df
-
-
-def get_rdpa_daily_data(year, month, day):
-    """Function to download Regional Deterministic Precipitation Analysis (RDPA) grib2 files"""
-    # Archived "nowcast"
-    url = f"/vsicurl/https://collaboration.cmc.ec.gc.ca/science/outgoing/capa.grib/{year}{month}{day}12_000_CMC_RDPA_APCP-024-0700cutoff_SFC_0_ps10km.grib2"
-    ds = gdal.Open(url)
-    if ds is None:
-        # Recent "nowcast"
-        url = f"/vsicurl/https://dd.weather.gc.ca/analysis/precip/rdpa/grib2/polar_stereographic/24/CMC_RDPA_APCP-024-0700cutoff_SFC_0_ps10km_{year}{month}{day}12_000.grib2"
-        ds = gdal.Open(url)
-
-    if ds is None:
-        # Archived "hindcast"
-        url = f"/vsicurl/https://collaboration.cmc.ec.gc.ca/science/outgoing/capa.grib/hindcast/capa_hindcast_v2.4/24h/{year}{month}{day}12_000_CMC_RDPA_APCP-024_SFC_0_ps10km.grib2"
-        ds = gdal.Open(url)
-    # https://eccc-msc.github.io/open-data/msc-data/nwp_rdpa/readme_rdpa-datamart_en/
-    # Band 0 (1) is Analysis of Accumulated Precipitation on a 06hr or 24hr interval
-    # Band 1 (2) is Confidence Index for Analysis
-    band = ds.GetRasterBand(1)
-    dataset = band.ReadAsArray()
-    dataset[dataset == band.GetNoDataValue()] = np.nan
-    dataset = np.flip(dataset, 0)
-    return dataset
-
-
-def prepare_rdpa_data():
-    """Function to format RDPA data into global dataframes"""
-    global df_map_rdpa
-
-    # RDPS/RDPA preformatted ASCII file https://meteo.gc.ca/grib/10km_res.bz2
-    # https://eccc-msc.github.io/open-data/msc-data/nwp_rdps/readme_rdps-datamart_en/
-    # dfcoord = pd.read_csv('10km_res')
-    # coordinates of the first grid point should be 18.1429° N 142.8968° W
-    # set starting index to 0,0
-    # https://eccc-msc.github.io/open-data/msc-data/nwp_rdpa/readme_rdpa-datamart_en/
-    # dfcoord['Longitude'] = dfcoord['Longitude'] - 360  # - 0.0043 + 0.000044
-    # dfcoord['Latitude'] = dfcoord['Latitude']  # - 0.002130
-    # dfcoord['ni'] = dfcoord['ni'] - 1
-    # dfcoord['nj'] = dfcoord['nj'] - 1
-
-    dt = pd.to_datetime(np.arange(f'{current_yr}-01-01', f'{int(current_yr) + 1}-01-01', dtype='datetime64[D]'))
-    tot = np.zeros((len(dt), 824, 935))
-    for cnt, i in enumerate(dt):
-        try:
-            ds = get_rdpa_daily_data(i.strftime('%Y'), i.strftime('%m'), i.strftime('%d'))
-        except:  # All errors caught
-            ds = np.nan
-        tot[cnt, :, :] = ds
-
-    stations = [*flow_stn, *level_stn]
-    df_map_rdpa = []
-    for sta in stations:
-        shapefile = os.path.join(files_dir, 'rdpa_grids', f'CaPA_grid_{sta}.shp')
-        if os.path.exists(shapefile):
-            gdf = gpd.read_file(shapefile)
-            gdf['Weight'] = gdf.area / np.sum(gdf.area)
-
-            MAP = np.zeros((len(dt)))
-            for i in range(0, len(gdf)):
-                # -1 for nj and ni because the index in the shapefiles start at 1 instead of 0
-                MAP += tot[:, gdf['nj'][i]-1, gdf['ni'][i]-1].squeeze() * gdf['Weight'][i]
-
-            data = {'StationID': sta, 'DATE': dt, 'VALUE': MAP}
-            df_map_rdpa.append(pd.DataFrame(data))
-
-    df_map_rdpa = pd.concat(df_map_rdpa)
-
-    return
-
-
-def get_precip(stn):
-    """Function to download precip data for each hydrometric station, based on the climate station specified in
-    Station_Meta.csv"""
-    CS_ID = df_meta[df_meta.ID == stn].CS.iloc[0]
-
-    # Environment Canada Climate Stations
-    ECCC = ['3060330', '3062697', '3064528']
-    if CS_ID in ECCC:
-        timeframe = 2  # 1 for hourly data, 2 for daily data, 3 for monthly data
-        if CS_ID == '3062697':
-            stationID = 49490
-            CS = "Climate Station 3062697: Fort McMurray A (ECCC)"
-        elif CS_ID == '3064528':
-            stationID = 10978
-            CS = "Climate Station 3064528: Mildred Lake (ECCC)"
-        elif CS_ID == '3060330':
-            stationID = 47047
-            CS = "Climate Station 3060330: Athabasca AGCM (ECCC)"
-
-        df = get_climate_data(stationID, current_yr, timeframe)
-        df = df.filter(["Date/Time", "Total Precip (mm)"])
-        df = df.rename(columns={"Date/Time": "DATE", "Total Precip (mm)": "VALUE"})
-
-    # All other precip data must be saved locally
-    else:
-        df = df_precip[df_precip.CS_ID == CS_ID].reset_index()
-        CS = f"Climate Station: {df.Name.iloc[0]} ({df.Source.iloc[0]})"
-
-        df = df.rename(columns={"Date": "DATE", "Daily Precip": "VALUE"})
-        df = df.filter(["DATE", "VALUE"])
-
-    df["DATE"] = df["DATE"].astype('datetime64[ns]')
-    return df, CS
-
-
-def get_map_rdpa(stn):
-    """Function to select RDPA MAP data for each hydrometric station"""
-    df = df_map_rdpa[df_map_rdpa.StationID == stn].reset_index()
-    df = df.filter(["DATE", "VALUE"])
-
-    df["DATE"] = df["DATE"].astype('datetime64[ns]')
+def get_map_rdpa(station):
+    df = pd.DataFrame()
+    df['VALUE'] = df_precip[station].values
+    df['DATE'] = pd.to_datetime(df_precip['datetime'].values)
     return df
 
 
@@ -576,15 +452,10 @@ def plot(conn, stn):
     ice_date = ice_period.DATE
 
     # ***************
-    if not use_RDPA:
-        precip, CS = get_precip(stn)
-        p = precip.VALUE
-        p_date = precip.DATE
-    else:
-        map_rdpa = get_map_rdpa(stn)
-        if not map_rdpa.empty:
-            p = map_rdpa.VALUE
-            p_date = map_rdpa.DATE
+    map_rdpa = get_map_rdpa(stn)
+    if not map_rdpa.empty:
+        p = map_rdpa.VALUE
+        p_date = map_rdpa.DATE
     # ***************
 
     record = get_record_period_Q(conn, stn)
@@ -598,38 +469,26 @@ def plot(conn, stn):
     # Add Footnotes
     if df_meta[df_meta.ID == stn]["RAMP Record"].isnull().iloc[0]:
 
-        if not use_RDPA:
-            precip_label = f"Precipitation {current_yr}*"
-        else:
-            precip_label = f"Basin Mean Areal Precipitation {current_yr}*"
+        precip_label = f"Basin Mean Areal Precipitation {current_yr}*"
 
         percentile_label = f"25th to 75th Percentiles ({record.YEAR_FROM[0]} - {record.YEAR_TO[0]})"
         max_label = f"Maximum Flow on Record ({record.YEAR_FROM[0]} - {record.YEAR_TO[0]})"
         min_label = f"Minimum Flow on Record ({record.YEAR_FROM[0]} - {record.YEAR_TO[0]})"
 
-        if not use_RDPA:
-            plt.figtext(0.92, 0.01, f'*Precipitation from {CS}', ha='right', va='bottom')
-        else:
-            plt.figtext(0.92, 0.01, f'*Precipitation from Regional Deterministic Precipitation Analysis', ha='right',
-                        va='bottom')
+        plt.figtext(0.92, 0.01, f'*Precipitation from Regional Deterministic Precipitation Analysis',
+                    ha='right', va='bottom')
 
     else:
 
-        if not use_RDPA:
-            precip_label = f"Precipitation {current_yr}**"
-        else:
-            precip_label = f"Basin Mean Areal Precipitation {current_yr}**"
+        precip_label = f"Basin Mean Areal Precipitation {current_yr}**"
 
         percentile_label = f"25th to 75th Percentiles ({record.YEAR_FROM[0]} - {record.YEAR_TO[0]})*"
         max_label = f"Maximum Flow on Record ({record.YEAR_FROM[0]} - {record.YEAR_TO[0]})*"
         min_label = f"Minimum Flow on Record ({record.YEAR_FROM[0]} - {record.YEAR_TO[0]})*"
         plt.figtext(0.92, 0.03, f'*Monitoring occurred under RAMP from {RAMP_record}', ha='right', va='bottom')
 
-        if not use_RDPA:
-            plt.figtext(0.92, 0.01, f'**Precipitation from {CS}', ha='right', va='bottom')
-        else:
-            plt.figtext(0.92, 0.01, f'**Precipitation from Regional Deterministic Precipitation Analysis', ha='right',
-                        va='bottom')
+        plt.figtext(0.92, 0.01, f'**Precipitation from Regional Deterministic Precipitation Analysis',
+                    ha='right', va='bottom')
 
     # Daily Flows and Percentiles
     ax1.plot(f_date, flow, linewidth=2.5, label=f"Flow {current_yr}")
@@ -670,7 +529,6 @@ def plot(conn, stn):
     plt.tight_layout(pad=3.5)
     plt.savefig(os.path.join(files_dir, fr'{current_yr} Report\Figures\{stn_name} - {stn}.png'))
     plt.close()
-    return
 
 
 # Appendix C: Hydrographs for All Discharge Measurement Stations
@@ -700,15 +558,10 @@ def plot_appendix_flow(conn, stn):
     ice_date = ice_period.DATE
 
     # ***************
-    if not use_RDPA:
-        precip, CS = get_precip(stn)
-        p = precip.VALUE
-        p_date = precip.DATE
-    else:
-        map_rdpa = get_map_rdpa(stn)
-        if not map_rdpa.empty:
-            p = map_rdpa.VALUE
-            p_date = map_rdpa.DATE
+    map_rdpa = get_map_rdpa(stn)
+    if not map_rdpa.empty:
+        p = map_rdpa.VALUE
+        p_date = map_rdpa.DATE
     # ***************
 
     record = get_record_period_Q(conn, stn)
@@ -722,38 +575,26 @@ def plot_appendix_flow(conn, stn):
     # Add Footnotes
     if df_meta[df_meta.ID == stn]["RAMP Record"].isnull().iloc[0]:
 
-        if not use_RDPA:
-            precip_label = f"Precipitation {current_yr}*"
-        else:
-            precip_label = f"Basin Mean Areal Precipitation {current_yr}*"
+        precip_label = f"Basin Mean Areal Precipitation {current_yr}*"
 
         percentile_label = f"25th to 75th Percentiles ({record.YEAR_FROM[0]} - {record.YEAR_TO[0]})"
         max_label = f"Maximum Flow on Record ({record.YEAR_FROM[0]} - {record.YEAR_TO[0]})"
         min_label = f"Minimum Flow on Record ({record.YEAR_FROM[0]} - {record.YEAR_TO[0]})"
 
-        if not use_RDPA:
-            plt.figtext(0.92, 0.01, f'*Precipitation from {CS}', ha='right', va='bottom')
-        else:
-            plt.figtext(0.92, 0.01, f'*Precipitation from Regional Deterministic Precipitation Analysis', ha='right',
-                        va='bottom')
+        plt.figtext(0.92, 0.01, f'*Precipitation from Regional Deterministic Precipitation Analysis',
+                    ha='right', va='bottom')
 
     else:
 
-        if not use_RDPA:
-            precip_label = f"Precipitation {current_yr}**"
-        else:
-            precip_label = f"Basin Mean Areal Precipitation {current_yr}**"
+        precip_label = f"Basin Mean Areal Precipitation {current_yr}**"
 
         percentile_label = f"25th to 75th Percentiles ({record.YEAR_FROM[0]} - {record.YEAR_TO[0]})*"
         max_label = f"Maximum Flow on Record ({record.YEAR_FROM[0]} - {record.YEAR_TO[0]})*"
         min_label = f"Minimum Flow on Record ({record.YEAR_FROM[0]} - {record.YEAR_TO[0]})*"
         plt.figtext(0.92, 0.03, f'*Monitoring occurred under RAMP from {RAMP_record}', ha='right', va='bottom')
 
-        if not use_RDPA:
-            plt.figtext(0.92, 0.01, f'**Precipitation from {CS}', ha='right', va='bottom')
-        else:
-            plt.figtext(0.92, 0.01, f'**Precipitation from Regional Deterministic Precipitation Analysis', ha='right',
-                        va='bottom')
+        plt.figtext(0.92, 0.01, f'**Precipitation from Regional Deterministic Precipitation Analysis',
+                    ha='right', va='bottom')
 
     # Daily Flows and Percentiles
     ax1.plot(f_date, flow, linewidth=2.5, label=f"Flow {current_yr}")
@@ -794,7 +635,6 @@ def plot_appendix_flow(conn, stn):
     plt.tight_layout(pad=3.5)
     plt.savefig(os.path.join(files_dir, fr'{current_yr} Report\Figures\Appendix\{stn_name} - {stn}.png'))
     plt.close()
-    return
 
 
 # Appendix C: Hydrographs for All Level Measurement Stations
@@ -810,7 +650,8 @@ def plot_appendix_level(conn, stn):
     min_date = date_cy.min()
     max_date = date_cy.max()
 
-    df_ly = df[(df['DATE'] > dt.datetime(previous_yr - 1, 12, 31)) & (df['DATE'] < dt.datetime(current_yr, 1, 1))].copy()
+    df_ly = df[
+        (df['DATE'] > dt.datetime(previous_yr - 1, 12, 31)) & (df['DATE'] < dt.datetime(current_yr, 1, 1))].copy()
     # daily_levels_ly = get_daily_levels_ly(conn, stn)
     df_ly.YEAR = df_ly.YEAR.replace(previous_yr, current_yr)
     df_ly.DATE = pd.to_datetime(df_ly[['YEAR', 'MONTH', 'DAY']], errors='coerce')
@@ -832,15 +673,10 @@ def plot_appendix_level(conn, stn):
                                (level_quantiles.DATE > min_date) & (level_quantiles.DATE < max_date)].DATE
 
     # ***************
-    if not use_RDPA:
-        precip, CS = get_precip(stn)
-        p = precip.VALUE
-        p_date = precip.DATE
-    else:
-        map_rdpa = get_map_rdpa(stn)
-        if not map_rdpa.empty:
-            p = map_rdpa.VALUE
-            p_date = map_rdpa.DATE
+    map_rdpa = get_map_rdpa(stn)
+    if not map_rdpa.empty:
+        p = map_rdpa.VALUE
+        p_date = map_rdpa.DATE
     # ***************
 
     record = get_record_period_H(conn, stn)
@@ -854,28 +690,19 @@ def plot_appendix_level(conn, stn):
     # Add Footnotes
     if df_meta[df_meta.ID == stn]["RAMP Record"].isnull().iloc[0]:
 
-        if not use_RDPA:
-            precip_label = f"Precipitation {current_yr}*"
-        else:
-            precip_label = f"Basin Mean Areal Precipitation {current_yr}*"
+        precip_label = f"Basin Mean Areal Precipitation {current_yr}*"
 
         previous_label = f"Previous Year (Record {record.YEAR_FROM[0]} - {record.YEAR_TO[0]})"
         percentile_label = f"25th to 75th Percentiles ({record.YEAR_FROM[0]} - {record.YEAR_TO[0]})"
         max_label = f"Maximum Level on Record ({record.YEAR_FROM[0]} - {record.YEAR_TO[0]})"
         min_label = f"Minimum Level on Record ({record.YEAR_FROM[0]} - {record.YEAR_TO[0]})"
 
-        if not use_RDPA:
-            plt.figtext(0.92, 0.01, f'*Precipitation from {CS}', ha='right', va='bottom')
-        else:
-            plt.figtext(0.92, 0.01, f'*Precipitation from Regional Deterministic Precipitation Analysis', ha='right',
-                        va='bottom')
+        plt.figtext(0.92, 0.01, f'*Precipitation from Regional Deterministic Precipitation Analysis',
+                    ha='right', va='bottom')
 
     else:
 
-        if not use_RDPA:
-            precip_label = f"Precipitation {current_yr}**"
-        else:
-            precip_label = f"Basin Mean Areal Precipitation {current_yr}**"
+        precip_label = f"Basin Mean Areal Precipitation {current_yr}**"
 
         previous_label = f"Previous Year (Record {record.YEAR_FROM[0]} - {record.YEAR_TO[0]})*"
         percentile_label = f"25th to 75th Percentiles ({record.YEAR_FROM[0]} - {record.YEAR_TO[0]})*"
@@ -883,11 +710,8 @@ def plot_appendix_level(conn, stn):
         min_label = f"Minimum Level on Record ({record.YEAR_FROM[0]} - {record.YEAR_TO[0]})*"
         plt.figtext(0.92, 0.03, f'*Monitoring occurred under RAMP from {RAMP_record}', ha='right', va='bottom')
 
-        if not use_RDPA:
-            plt.figtext(0.92, 0.01, f'**Precipitation from {CS}', ha='right', va='bottom')
-        else:
-            plt.figtext(0.92, 0.01, f'**Precipitation from Regional Deterministic Precipitation Analysis', ha='right',
-                        va='bottom')
+        plt.figtext(0.92, 0.01, f'**Precipitation from Regional Deterministic Precipitation Analysis',
+                    ha='right', va='bottom')
 
     # Daily Levels and Percentiles
     ax1.plot(date_cy, level_cy, linewidth=2.5, label=f"Level {current_yr}")
@@ -941,7 +765,6 @@ def plot_appendix_level(conn, stn):
     plt.tight_layout(pad=3.5)
     plt.savefig(os.path.join(files_dir, fr'{current_yr} Report\Figures\Appendix\{stn_name} - {stn}.png'))
     plt.close()
-    return
 
 
 ###################################################################
@@ -1087,8 +910,7 @@ def Run():
     global current_yr
     global previous_yr
     global next_yr
-    if not use_RDPA:
-        global df_precip
+    global df_precip
 
     # Specify reporting year
     print("Enter reporting year ")
@@ -1099,9 +921,8 @@ def Run():
     previous_yr = current_yr - 1
     next_yr = current_yr + 1
 
-    if not use_RDPA:
-        # Daily Precip Data
-        df_precip = pd.read_csv(os.path.join(files_dir, f'DailyPrecip{current_yr}.csv'), low_memory=False)
+    # Daily Precip Data
+    df_precip = pd.read_csv(os.path.join(files_dir, f'RDPAPrecip{current_yr}.csv'), low_memory=False)
 
     # Create station folder (all files to be saved here)
     annual_report_path = os.path.join(files_dir, f'{x} Report')
@@ -1113,11 +934,6 @@ def Run():
         os.mkdir(figures_path)
         os.mkdir(appendix_figures_path)
         print(f"Directory '{annual_report_path}' created")
-
-    if use_RDPA:
-        start_timer = timer()
-        prepare_rdpa_data()
-        print(f'prepare_rdpa_data() run in {timer() - start_timer} seconds.')
 
     start_timer = timer()
     # Generate figures for main body of report: Key Indicator Stations
@@ -1152,8 +968,6 @@ def Run():
     Appendix_B2 = Appendix_B2.reset_index(drop=True)
     Appendix_B2.to_csv((os.path.join(files_dir, f'{current_yr} Report', 'Appendix_B2.csv')), index=False, header=True)
     print(f'Appendix B2 created in {timer() - start_timer} seconds.')
-
-    return
 
 
 # Run the program
