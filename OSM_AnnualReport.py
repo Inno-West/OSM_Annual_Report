@@ -188,7 +188,23 @@ def get_daily_flows(conn, stn):
     # Remove data after current year
     df = df[df.YEAR <= current_yr]
 
-    return df
+    # return df
+    # TODO: REMOVE TEMP CHANGE AFTER NEXT HYDAT RELEASE
+    # TEMPORARY CHANGE ###########################################################################
+    if stn == '07BE001' or stn == '07CE003':  # or stn == '06AA001':
+        df_test = pd.read_csv(f'{stn}_Daily_Flow_ts.csv')
+        df_test['DATE'] = pd.to_datetime(df_test[['YEAR', 'MONTH', 'DAY']], errors='coerce')
+        df_test['FLAG'][df_test['FLAG'].isna()] = 'None'
+
+        df_test.YEAR = df_test.YEAR.astype(int)
+        df_test.MONTH = df_test.MONTH.astype(int)
+        df_test.DAY = df_test.DAY.astype(int)
+
+        df_test = df_test[df_test.YEAR <= current_yr]
+        return df_test
+    else:
+        # TEMPORARY CHANGE ###########################################################################
+        return df
 
 
 def get_mean_flows(conn, stn):
@@ -493,7 +509,11 @@ def plot(conn, stn):
     # Daily Flows and Percentiles
     ax1.plot(f_date, flow, linewidth=2.5, label=f"Flow {current_yr}")
 
-    ax1.fill_between(q_date, q_25, q_75, label=percentile_label, alpha=0.6, facecolor='yellow')
+    try:
+        ax1.fill_between(q_date, q_25, q_75, label=percentile_label, alpha=0.6, facecolor='yellow')
+    except ValueError:
+        ax1.fill_between(q_date[q_25.index], q_25, q_75, label=percentile_label, alpha=0.6, facecolor='yellow')
+
     ax1.plot(q_date, q_max, 'k', dashes=[5, 5, 5, 5], label=max_label)
     ax1.plot(q_date, q_min, 'k--', label=min_label)
 
