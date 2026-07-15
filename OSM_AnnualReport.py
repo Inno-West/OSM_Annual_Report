@@ -25,8 +25,8 @@ Required local files:
 import datetime as dt
 import os
 import sqlite3
-from timeit import default_timer as timer
 import warnings
+from timeit import default_timer as timer
 
 import matplotlib.dates as mdate
 import matplotlib.pyplot as plt
@@ -42,32 +42,33 @@ warnings.filterwarnings('ignore')
 ignore_current_year_for_stats = False
 
 # Key Stations for Main Body Report
-stn = ['07DD001', '07DA001', '07CD005', '07BE001']
+KEY_STATIONS = ['07DD001', '07DA001', '07CD005', '07BE001']
 
 # All Oil Sands Hydrometric Stations to be included in Appendices
-flow_stn = ['07BE001', '07DD001', '07DA001', '07DA018', '07DA040', '07DA033', '07CE013', '07CE002', '07CE007',
-            '07CD005', '07CD001', '07DB002', '07DB003', '07DA038', '07DA039', '07DA032', '07DA041', '07DC001',
-            '07DC003', '07CE008', '07CD004', '07CD008', '07CD009', '07CB002', '07DA027', '07CE005', '07DA026',
-            '07DA030', '07DB006', '07DB001', '07DC004', '07DA035', '07DA029', '07DA028', '07DA008', '07DA034',
-            '07CE003', '07DA007', '07DA042', '07DA044', '07DA006', '07CE010', '07DA037', '07DA045']
+FLOW_STATIONS = ['07BE001', '07DD001', '07DA001', '07DA018', '07DA040', '07DA033', '07CE013', '07CE002', '07CE007',
+                 '07CD005', '07CD001', '07DB002', '07DB003', '07DA038', '07DA039', '07DA032', '07DA041', '07DC001',
+                 '07DC003', '07CE008', '07CD004', '07CD008', '07CD009', '07CB002', '07DA027', '07CE005', '07DA026',
+                 '07DA030', '07DB006', '07DB001', '07DC004', '07DA035', '07DA029', '07DA028', '07DA008', '07DA034',
+                 '07CE003', '07DA007', '07DA042', '07DA044', '07DA006', '07CE010', '07DA037', '07DA045']
 
-level_stn = ['07CE001', '07DA024', '07DA023', '07DA025']
+LEVEL_STATIONS = ['07CE001', '07DA024', '07DA023', '07DA025']
 
 # Make sure files are saved in current working directory 
-files_dir = os.getcwd()
+FILES_DIR = os.getcwd()
 
 # Locally Saved Data
 # Set up connection to HYDAT database saved to local folder
-database = r"C:\Program Files (x86)\ECCC\ECDataExplorer\Database\Hydat.sqlite3"
-conn = sqlite3.connect(database)
+DATABASE = r"C:\Program Files (x86)\ECCC\ECDataExplorer\Database\Hydat.sqlite3"
+CONN = sqlite3.connect(DATABASE)
+HYDAT_READY_FOLDER = r"C:\Users\LeachJ\PycharmProjects\osm_annual_report\hydat_ready"
 
 # Station Meta Data (record, RAMP record, associated climate stations)
-df_meta = pd.read_csv(os.path.join(files_dir, 'Station_Meta.csv'), low_memory=False)
+DF_META = pd.read_csv(os.path.join(FILES_DIR, 'Station_Meta.csv'), low_memory=False)
 # dfCSL = pd.read_csv('Climate_station_locations.csv')
 
 # RAMP data
-df_RAMP_Q = pd.read_csv(os.path.join(files_dir, 'RAMP_Q.csv'), low_memory=False)
-df_RAMP_H = pd.read_csv(os.path.join(files_dir, 'RAMP_H.csv'), low_memory=False)
+DF_RAMP_Q = pd.read_csv(os.path.join(FILES_DIR, 'RAMP_Q.csv'), low_memory=False, parse_dates=['Date'])
+DF_RAMP_H = pd.read_csv(os.path.join(FILES_DIR, 'RAMP_H.csv'), low_memory=False, parse_dates=['Date'])
 
 
 ###################################################################
@@ -87,10 +88,8 @@ def get_record_period_Q(conn, stn):
     df = pd.read_sql_query(
         f"SELECT STATION_NUMBER, YEAR_FROM, YEAR_TO FROM STN_DATA_RANGE WHERE STATION_NUMBER = '{stn}' AND DATA_TYPE = 'Q'"
         , conn)
-    # import record/station information (RAMP, HYDAT, Drainage Areas)
-    # df_meta = pd.read_csv(os.path.join(files_dir, 'Station_Meta.csv'), low_memory=False)
 
-    df["YEAR_FROM"] = df_meta[df_meta['ID'] == stn]["Full Record Start"].iloc[0]
+    df["YEAR_FROM"] = DF_META[DF_META['ID'] == stn]["Full Record Start"].iloc[0]
     if ignore_current_year_for_stats:
         df["YEAR_TO"] = previous_yr
     else:
@@ -105,10 +104,8 @@ def get_record_period_H(conn, stn):
     df = pd.read_sql_query(
         f"SELECT STATION_NUMBER, YEAR_FROM, YEAR_TO FROM STN_DATA_RANGE WHERE STATION_NUMBER = '{stn}' AND DATA_TYPE = 'H'"
         , conn)
-    # import record/station information (RAMP, HYDAT, Drainage Areas)
-    # df_meta = pd.read_csv(os.path.join(files_dir, 'Station_Meta.csv'), low_memory=False)
 
-    df["YEAR_FROM"] = df_meta[df_meta['ID'] == stn]["Full Record Start"].iloc[0]
+    df["YEAR_FROM"] = DF_META[DF_META['ID'] == stn]["Full Record Start"].iloc[0]
     if ignore_current_year_for_stats:
         df["YEAR_TO"] = previous_yr
     else:
@@ -161,24 +158,34 @@ def get_daily_flows(conn, stn):
     # Add Date
     df_HYDAT['DATE'] = pd.to_datetime(df_HYDAT[['YEAR', 'MONTH', 'DAY']], errors='coerce')
 
+    if len(df_HYDAT[df_HYDAT['YEAR'] == current_yr]) == 0:
+        print(f'... {stn} is missing data for {current_yr} in local database, checking hydat ready data from AQ')
+        df_HYDAT = pd.read_csv(os.path.join(HYDAT_READY_FOLDER, f'{stn}_Daily_Flow_ts.csv'), parse_dates=['Date'])
+        df_HYDAT = df_HYDAT.rename(columns={'Date': 'DATE'})
+        df_HYDAT['FLAG'][df_HYDAT['FLAG'].isna()] = 'None'
+
+        df_HYDAT.YEAR = df_HYDAT.YEAR.astype(int)
+        df_HYDAT.MONTH = df_HYDAT.MONTH.astype(int)
+        df_HYDAT.DAY = df_HYDAT.DAY.astype(int)
+
     # Add Ramp data, if it exists
-    df_RAMP = df_RAMP_Q.filter(['Station', 'Date', 'Discharge', 'Discharge Flag'])
-    df_RAMP = df_RAMP.rename(
-        columns={'Station': 'STATION_NUMBER', 'Date': 'DATE', 'Discharge': 'FLOW', 'Discharge Flag': 'FLAG'})
-    df_RAMP['DATE'] = pd.to_datetime(df_RAMP['DATE']).dt.normalize()
-    df_RAMP['YEAR'] = df_RAMP['DATE'].dt.year
-    df_RAMP['MONTH'] = df_RAMP['DATE'].dt.month
-    df_RAMP['DAY'] = df_RAMP['DATE'].dt.day
-    cols = ['STATION_NUMBER', 'YEAR', 'MONTH', 'DAY', 'FLOW', 'FLAG', 'DATE']
-    df_RAMP = df_RAMP[cols]
-    df_RAMP = df_RAMP[df_RAMP['STATION_NUMBER'] == stn]
+    if stn in DF_RAMP_Q['Station'].unique():
+        df_RAMP = DF_RAMP_Q.loc[DF_RAMP_Q['Station'] == stn, ['Station', 'Date', 'Discharge', 'Discharge Flag']].copy(deep=True)
+        df_RAMP.reset_index(inplace=True)
+        df_RAMP = df_RAMP.rename(columns={'Station': 'STATION_NUMBER', 'Date': 'DATE', 'Discharge': 'FLOW',
+                                          'Discharge Flag': 'FLAG'})
+        df_RAMP['YEAR'] = df_RAMP['DATE'].dt.year
+        df_RAMP['MONTH'] = df_RAMP['DATE'].dt.month
+        df_RAMP['DAY'] = df_RAMP['DATE'].dt.day
+        df_RAMP = df_RAMP[['STATION_NUMBER', 'YEAR', 'MONTH', 'DAY', 'FLOW', 'FLAG', 'DATE']]
 
-    # Prioritize HYDAT if there is overlap in data
-    df_RAMP = df_RAMP[~df_RAMP['DATE'].isin(df_HYDAT['DATE'])]
+        # Prioritize HYDAT if there is overlap in data
+        df_RAMP = df_RAMP[~df_RAMP['DATE'].isin(df_HYDAT['DATE'])]
 
-    # Merge RAMP with HYDAT
-    frames = [df_RAMP, df_HYDAT]
-    df = pd.concat(frames, ignore_index=True)
+        # Merge RAMP with HYDAT
+        df = pd.concat([df_RAMP, df_HYDAT], ignore_index=True)
+    else:
+        df = df_HYDAT.copy(deep=True)
 
     # Convert types
     df.YEAR = df.YEAR.astype(int)
@@ -188,23 +195,7 @@ def get_daily_flows(conn, stn):
     # Remove data after current year
     df = df[df.YEAR <= current_yr]
 
-    # return df
-    # TODO: REMOVE TEMP CHANGE AFTER NEXT HYDAT RELEASE
-    # TEMPORARY CHANGE ###########################################################################
-    if stn == '07BE001' or stn == '07CE003':  # or stn == '06AA001':
-        df_test = pd.read_csv(f'{stn}_Daily_Flow_ts.csv')
-        df_test['DATE'] = pd.to_datetime(df_test[['YEAR', 'MONTH', 'DAY']], errors='coerce')
-        df_test['FLAG'][df_test['FLAG'].isna()] = 'None'
-
-        df_test.YEAR = df_test.YEAR.astype(int)
-        df_test.MONTH = df_test.MONTH.astype(int)
-        df_test.DAY = df_test.DAY.astype(int)
-
-        df_test = df_test[df_test.YEAR <= current_yr]
-        return df_test
-    else:
-        # TEMPORARY CHANGE ###########################################################################
-        return df
+    return df
 
 
 def get_mean_flows(conn, stn):
@@ -320,24 +311,34 @@ def get_daily_levels(conn, stn):
     # Add Date
     df_HYDAT['DATE'] = pd.to_datetime(df_HYDAT[['YEAR', 'MONTH', 'DAY']], errors='coerce')
 
+    if len(df_HYDAT[df_HYDAT['YEAR'] == current_yr]) == 0:
+        print(f'... {stn} is missing data for {current_yr} in local database, checking hydat ready data from AQ')
+        df_HYDAT = pd.read_csv(os.path.join(HYDAT_READY_FOLDER, f'{stn}_Daily_Level_ts.csv'), parse_dates=['Date'])
+        df_HYDAT = df_HYDAT.rename(columns={'Date': 'DATE'})
+        df_HYDAT['FLAG'][df_HYDAT['FLAG'].isna()] = 'None'
+
+        df_HYDAT.YEAR = df_HYDAT.YEAR.astype(int)
+        df_HYDAT.MONTH = df_HYDAT.MONTH.astype(int)
+        df_HYDAT.DAY = df_HYDAT.DAY.astype(int)
+
     # Add Ramp data, if it exists
-    df_RAMP = df_RAMP_H.filter(['Station', 'Date', 'Level', 'Level Flag'])
-    df_RAMP = df_RAMP.rename(
-        columns={'Station': 'STATION_NUMBER', 'Date': 'DATE', 'Level': 'LEVEL', 'Level Flag': 'FLAG'})
-    df_RAMP['DATE'] = pd.to_datetime(df_RAMP['DATE']).dt.normalize()
-    df_RAMP['YEAR'] = df_RAMP['DATE'].dt.year
-    df_RAMP['MONTH'] = df_RAMP['DATE'].dt.month
-    df_RAMP['DAY'] = df_RAMP['DATE'].dt.day
-    cols = ['STATION_NUMBER', 'YEAR', 'MONTH', 'DAY', 'LEVEL', 'FLAG', 'DATE']
-    df_RAMP = df_RAMP[cols]
-    df_RAMP = df_RAMP[df_RAMP['STATION_NUMBER'] == stn]
+    if stn in DF_RAMP_Q['Station'].unique():
+        df_RAMP = DF_RAMP_H.loc[DF_RAMP_Q['Station'] == stn, ['Station', 'Date', 'Level', 'Level Flag']].copy(deep=True)
+        df_RAMP.reset_index(inplace=True)
+        df_RAMP = df_RAMP.rename(columns={'Station': 'STATION_NUMBER', 'Date': 'DATE', 'Level': 'LEVEL',
+                                          'Level Flag': 'FLAG'})
+        df_RAMP['YEAR'] = df_RAMP['DATE'].dt.year
+        df_RAMP['MONTH'] = df_RAMP['DATE'].dt.month
+        df_RAMP['DAY'] = df_RAMP['DATE'].dt.day
+        df_RAMP = df_RAMP[['STATION_NUMBER', 'YEAR', 'MONTH', 'DAY', 'LEVEL', 'FLAG', 'DATE']]
 
-    # Prioritize HYDAT if there is overlap in data
-    df_RAMP = df_RAMP[~df_RAMP['DATE'].isin(df_HYDAT['DATE'])]
+        # Prioritize HYDAT if there is overlap in data
+        df_RAMP = df_RAMP[~df_RAMP['DATE'].isin(df_HYDAT['DATE'])]
 
-    # Merge RAMP with HYDAT
-    frames = [df_RAMP, df_HYDAT]
-    df = pd.concat(frames, ignore_index=True)
+        # Merge RAMP with HYDAT
+        df = pd.concat([df_RAMP, df_HYDAT], ignore_index=True)
+    else:
+        df = df_HYDAT.copy(deep=True)
 
     # Account for datum shift
     if stn == '07DA024':
@@ -458,7 +459,7 @@ def plot(conn, stn):
     q_min = flow_quantiles[flow_quantiles.n >= 2].MIN
     q_max = flow_quantiles[flow_quantiles.n >= 2].MAX
     q_25 = flow_quantiles[flow_quantiles.n >= 5].p_25
-    q_50 = flow_quantiles[flow_quantiles.n >= 5].p_50
+    # q_50 = flow_quantiles[flow_quantiles.n >= 5].p_50
     q_75 = flow_quantiles[flow_quantiles.n >= 5].p_75
     q_date = flow_quantiles.DATE
 
@@ -472,10 +473,13 @@ def plot(conn, stn):
     if not map_rdpa.empty:
         p = map_rdpa.VALUE
         p_date = map_rdpa.DATE
+    else:
+        p = np.full_like(flow, np.nan)
+        p_date = f_date.copy()
     # ***************
 
     record = get_record_period_Q(conn, stn)
-    RAMP_record = df_meta[df_meta.ID == stn]["RAMP Record"].iloc[0]
+    RAMP_record = DF_META[DF_META.ID == stn]["RAMP Record"].iloc[0]
 
     # Create Figure
     fig, ax1 = plt.subplots(sharex=True)
@@ -483,7 +487,7 @@ def plot(conn, stn):
     fig.autofmt_xdate()  # rotates datetime on angle
 
     # Add Footnotes
-    if df_meta[df_meta.ID == stn]["RAMP Record"].isnull().iloc[0]:
+    if DF_META[DF_META.ID == stn]["RAMP Record"].isnull().iloc[0]:
 
         precip_label = f"Basin Mean Areal Precipitation {current_yr}*"
 
@@ -547,7 +551,7 @@ def plot(conn, stn):
 
     ax2.legend(lines1 + lines2, labels1 + labels2, loc='lower left', bbox_to_anchor=(0.68, 0.6), fontsize=11)
     plt.tight_layout(pad=3.5)
-    plt.savefig(os.path.join(files_dir, fr'{current_yr} Report\Figures\{stn_name} - {stn}.png'))
+    plt.savefig(os.path.join(FILES_DIR, fr'{current_yr} Report\Figures\{stn_name} - {stn}.png'))
     plt.close()
 
 
@@ -566,9 +570,9 @@ def plot_appendix_flow(conn, stn):
     q_min = flow_quantiles[flow_quantiles.n >= 2].MIN
     q_max = flow_quantiles[flow_quantiles.n >= 2].MAX
     q_25 = flow_quantiles[flow_quantiles.n >= 5].p_25
-    q_50 = flow_quantiles[flow_quantiles.n >= 5].p_50
+    # q_50 = flow_quantiles[flow_quantiles.n >= 5].p_50
     q_75 = flow_quantiles[flow_quantiles.n >= 5].p_75
-    q_date = flow_quantiles.DATE
+    # q_date = flow_quantiles.DATE
     q_date_m = flow_quantiles[flow_quantiles.n >= 2].DATE
     q_date_q = flow_quantiles[flow_quantiles.n >= 5].DATE
 
@@ -582,10 +586,13 @@ def plot_appendix_flow(conn, stn):
     if not map_rdpa.empty:
         p = map_rdpa.VALUE
         p_date = map_rdpa.DATE
+    else:
+        p = np.full_like(flow, np.nan)
+        p_date = f_date.copy()
     # ***************
 
     record = get_record_period_Q(conn, stn)
-    RAMP_record = df_meta[df_meta.ID == stn]["RAMP Record"].iloc[0]
+    RAMP_record = DF_META[DF_META.ID == stn]["RAMP Record"].iloc[0]
 
     # Create Figure
     fig, ax1 = plt.subplots(sharex=True)
@@ -593,7 +600,7 @@ def plot_appendix_flow(conn, stn):
     fig.autofmt_xdate()  # rotates datetime on angle
 
     # Add Footnotes
-    if df_meta[df_meta.ID == stn]["RAMP Record"].isnull().iloc[0]:
+    if DF_META[DF_META.ID == stn]["RAMP Record"].isnull().iloc[0]:
 
         precip_label = f"Basin Mean Areal Precipitation {current_yr}*"
 
@@ -653,7 +660,7 @@ def plot_appendix_flow(conn, stn):
 
     ax2.legend(lines1 + lines2, labels1 + labels2, loc='lower left', bbox_to_anchor=(0.68, 0.6), fontsize=11)
     plt.tight_layout(pad=3.5)
-    plt.savefig(os.path.join(files_dir, fr'{current_yr} Report\Figures\Appendix\{stn_name} - {stn}.png'))
+    plt.savefig(os.path.join(FILES_DIR, fr'{current_yr} Report\Figures\Appendix\{stn_name} - {stn}.png'))
     plt.close()
 
 
@@ -684,8 +691,8 @@ def plot_appendix_level(conn, stn):
     q_max = level_quantiles[(level_quantiles.DATE > min_date) & (level_quantiles.DATE < max_date)].MAX
     q_25 = level_quantiles[
         (level_quantiles.n >= 5) & (level_quantiles.DATE > min_date) & (level_quantiles.DATE < max_date)].p_25
-    q_50 = level_quantiles[
-        (level_quantiles.n >= 5) & (level_quantiles.DATE > min_date) & (level_quantiles.DATE < max_date)].p_50
+    # q_50 = level_quantiles[
+    #     (level_quantiles.n >= 5) & (level_quantiles.DATE > min_date) & (level_quantiles.DATE < max_date)].p_50
     q_75 = level_quantiles[
         (level_quantiles.n >= 5) & (level_quantiles.DATE > min_date) & (level_quantiles.DATE < max_date)].p_75
     q_date = level_quantiles[(level_quantiles.DATE > min_date) & (level_quantiles.DATE < max_date)].DATE
@@ -697,10 +704,13 @@ def plot_appendix_level(conn, stn):
     if not map_rdpa.empty:
         p = map_rdpa.VALUE
         p_date = map_rdpa.DATE
+    else:
+        p = np.full_like(level_cy, np.nan)
+        p_date = date_cy.copy()
     # ***************
 
     record = get_record_period_H(conn, stn)
-    RAMP_record = df_meta[df_meta.ID == stn]["RAMP Record"].iloc[0]
+    RAMP_record = DF_META[DF_META.ID == stn]["RAMP Record"].iloc[0]
 
     # Create Figure
     fig, ax1 = plt.subplots(sharex=True)
@@ -708,7 +718,7 @@ def plot_appendix_level(conn, stn):
     fig.autofmt_xdate()  # rotates datetime on angle
 
     # Add Footnotes
-    if df_meta[df_meta.ID == stn]["RAMP Record"].isnull().iloc[0]:
+    if DF_META[DF_META.ID == stn]["RAMP Record"].isnull().iloc[0]:
 
         precip_label = f"Basin Mean Areal Precipitation {current_yr}*"
 
@@ -753,14 +763,10 @@ def plot_appendix_level(conn, stn):
     ax1.set_xlim(left=dt.datetime(current_yr, 1, 1), right=dt.datetime(current_yr, 12, 31))
 
     # Set water level y-axis limits based on min and max values
-    try:
-        y_min = q_min.min()
-        y_max = max([q_max.max(), level_cy.max()])
-        ax1.set_ylim(top=(y_max + (y_max - y_min) * 0.2))
-    except:
-        y_min = level_cy.min()
-        y_max = level_cy.max()
-        ax1.set_ylim(top=(y_max + (y_max - y_min) * 0.2))
+    y_min = np.nanmin([np.nanmin(q_min), np.nanmin(level_cy)])
+    y_max = np.nanmax([np.nanmax(q_max), np.nanmax(level_cy)])
+
+    ax1.set_ylim(top=(y_max + (y_max - y_min) * 0.2))
 
     # Set precip y-axis limits based on max value
     ax2.set_ylabel('Precipitation [mm]', color='g', fontsize=12)
@@ -783,7 +789,7 @@ def plot_appendix_level(conn, stn):
 
     ax2.legend(lines1 + lines2, labels1 + labels2, loc='upper left', bbox_to_anchor=(0.68, 0.9), fontsize=11)
     plt.tight_layout(pad=3.5)
-    plt.savefig(os.path.join(files_dir, fr'{current_yr} Report\Figures\Appendix\{stn_name} - {stn}.png'))
+    plt.savefig(os.path.join(FILES_DIR, fr'{current_yr} Report\Figures\Appendix\{stn_name} - {stn}.png'))
     plt.close()
 
 
@@ -798,7 +804,7 @@ def get_discharge_station_details(conn, stn):
     df = pd.read_sql_query(f"SELECT STATION_NUMBER, STATION_NAME FROM STATIONS WHERE STATION_NUMBER = '{stn}'", conn)
 
     # import record/station information (RAMP, HYDAT, Drainage Areas)
-    DA = df_meta[df_meta.ID == stn].GDA.iloc[0]
+    DA = DF_META.loc[DF_META.ID == stn, 'GDA'].iloc[0]
     df['DRAINAGE_AREA_GROSS'] = DA
 
     record = get_record_period_Q(conn, stn)
@@ -806,43 +812,31 @@ def get_discharge_station_details(conn, stn):
 
     # Get Average Discharge for Current Year and Long Term
     mean = get_mean_flows(conn, stn)
-    try:
-        cy_mean = round(mean[mean.YEAR == current_yr].MEAN.iloc[0].tolist(), sigfigs=3)
-    except:
-        try:
-            cy_mean = round(mean[mean.YEAR == current_yr].MEAN.iloc[0], sigfigs=3)
-        except:
-            cy_mean = float("nan")
 
-    try:
-        lt_mean = round(mean.MEAN.mean().tolist(), sigfigs=3)
-    except:
-        try:
-            lt_mean = round(mean.MEAN.mean(), sigfigs=3)
-        except:
-            lt_mean = float("nan")
+    if not mean.empty:
+        if current_yr in mean.YEAR.values:
+            cy_mean = round(mean[mean.YEAR == current_yr].MEAN.iloc[0], sigfigs=3)
+        else:
+            cy_mean = np.nan
+
+        lt_mean = round(mean.MEAN.mean(), sigfigs=3)
+    else:
+        cy_mean = np.nan
+        lt_mean = np.nan
 
     # Calculate Water Yield for Current Year and Long Term
     if DA > 0:
-        try:
-            cy_yield = round((cy_mean / DA * 31556952 / 1000).tolist(),
+        cy_yield = round((cy_mean / DA * 31556952 / 1000),
                              sigfigs=3)  # Gregorian Calendar Year (365.2425 days)
-        except:
-            cy_yield = float("nan")
-        try:
-            lt_yield = round((lt_mean / DA * 31556952 / 1000).tolist(),
-                             sigfigs=3)  # Gregorian Calendar Year (365.2425 days)
-        except:
-            lt_yield = float("nan")
-    else:
-        cy_yield = float("nan")
-        lt_yield = float("nan")
 
-    # Calculate Current Year as Percentage of Historic Discharge        
-    try:
-        percent = round((cy_mean / lt_mean * 100), sigfigs=3)
-    except:
-        percent = float("nan")
+        lt_yield = round((lt_mean / DA * 31556952 / 1000),
+                             sigfigs=3)  # Gregorian Calendar Year (365.2425 days)
+    else:
+        cy_yield = np.nan
+        lt_yield = np.nan
+
+    # Calculate Current Year as Percentage of Historic Discharge
+    percent = round((cy_mean / lt_mean * 100), sigfigs=3)
 
     df['AVERAGE_FLOW'] = cy_mean
     df['YIELD'] = cy_yield
@@ -883,21 +877,17 @@ def get_level_station_details(conn, stn):
 
     # Get Average Level for Current Year and Long Term
     mean = get_mean_levels(conn, stn)
-    try:
-        cy_mean = round(mean[mean.YEAR == current_yr].MEAN.iloc[0].tolist(), decimals=3)
-    except:
-        try:
-            cy_mean = round(mean[mean.YEAR == current_yr].MEAN.iloc[0], decimals=3)
-        except:
-            cy_mean = float("nan")
 
-    try:
-        lt_mean = round(mean.MEAN.mean().tolist(), decimals=3)
-    except:
-        try:
-            lt_mean = round(mean.MEAN.mean(), decimals=3)
-        except:
-            lt_mean = float("nan")
+    if not mean.empty:
+        if current_yr in mean.YEAR.values:
+            cy_mean = round(mean[mean.YEAR == current_yr].MEAN.iloc[0], decimals=3)
+        else:
+            cy_mean = np.nan
+
+        lt_mean = round(mean.MEAN.mean(), decimals=3)
+    else:
+        cy_mean = np.nan
+        lt_mean = np.nan
 
     df['AVG'] = cy_mean
     df['AVG_LT'] = lt_mean
@@ -932,20 +922,16 @@ def Run():
     global next_yr
     global df_precip
 
-    # Specify reporting year
-    print("Enter reporting year ")
-    x = input()
-
-    # Set current reporting period
-    current_yr = int(x)
+    # Specify reporting year / Set current reporting period
+    current_yr = int(input("Enter reporting year\n"))
     previous_yr = current_yr - 1
     next_yr = current_yr + 1
 
     # Daily Precip Data
-    df_precip = pd.read_csv(os.path.join(files_dir, f'RDPAPrecip{current_yr}.csv'), low_memory=False)
+    df_precip = pd.read_csv(os.path.join(FILES_DIR, f'RDPAPrecip{current_yr}.csv'), low_memory=False)
 
     # Create station folder (all files to be saved here)
-    annual_report_path = os.path.join(files_dir, f'{x} Report')
+    annual_report_path = os.path.join(FILES_DIR, f'{current_yr} Report')
     figures_path = os.path.join(annual_report_path, 'Figures')
     appendix_figures_path = os.path.join(figures_path, 'Appendix')
 
@@ -957,36 +943,36 @@ def Run():
 
     start_timer = timer()
     # Generate figures for main body of report: Key Indicator Stations
-    for i in stn:
-        plot(conn, i)
+    for i in KEY_STATIONS:
+        plot(CONN, i)
     print(f'plot() run in {timer() - start_timer} seconds.')
 
     start_timer = timer()
     # Generate flow hydrographs for all discharge stations (in alphabetical order)
-    for i in flow_stn:
-        plot_appendix_flow(conn, i)
+    for i in FLOW_STATIONS:
+        plot_appendix_flow(CONN, i)
     print(f'plot_appendix_flow() run in {timer() - start_timer} seconds.')
 
     start_timer = timer()
     # Generate flow hydrographs for all level stations (in alphabetical order)
-    for i in level_stn:
-        plot_appendix_level(conn, i)
+    for i in LEVEL_STATIONS:
+        plot_appendix_level(CONN, i)
     print(f'plot_appendix_level() run in {timer() - start_timer} seconds.')
 
     start_timer = timer()
     # Table B1
-    frames_B1 = [get_discharge_station_details(conn, stn) for stn in flow_stn]
+    frames_B1 = [get_discharge_station_details(CONN, stn) for stn in FLOW_STATIONS]
     Appendix_B1 = pd.concat(frames_B1)
     Appendix_B1 = Appendix_B1.reset_index(drop=True)
-    Appendix_B1.to_csv((os.path.join(files_dir, f'{current_yr} Report', 'Appendix_B1.csv')), index=False, header=True)
+    Appendix_B1.to_csv((os.path.join(FILES_DIR, f'{current_yr} Report', 'Appendix_B1.csv')), index=False, header=True)
     print(f'Appendix B1 created in {timer() - start_timer} seconds.')
 
     start_timer = timer()
     # Table B2
-    frames_B2 = [get_level_station_details(conn, stn) for stn in level_stn]
+    frames_B2 = [get_level_station_details(CONN, stn) for stn in LEVEL_STATIONS]
     Appendix_B2 = pd.concat(frames_B2)
     Appendix_B2 = Appendix_B2.reset_index(drop=True)
-    Appendix_B2.to_csv((os.path.join(files_dir, f'{current_yr} Report', 'Appendix_B2.csv')), index=False, header=True)
+    Appendix_B2.to_csv((os.path.join(FILES_DIR, f'{current_yr} Report', 'Appendix_B2.csv')), index=False, header=True)
     print(f'Appendix B2 created in {timer() - start_timer} seconds.')
 
 
